@@ -1,99 +1,112 @@
-import { $query, $update, Record, StableBTreeMap, Vec, match, Result, nat64, ic, Opt } from 'azle';
+import {
+  $query,
+  $update,
+  Record,
+  StableBTreeMap,
+  Vec,
+  match,
+  Result,
+  nat64,
+  ic,
+  Opt,
+  Principal
+} from 'azle';
 import { v4 as uuidv4 } from 'uuid';
+import * as bcrypt from 'bcrypt';
 
 ////////////////////////////////////////////////////////////////
 // Interfaces
 ////////////////////////////////////////////////////////////////
 type Movie = Record<{
-    id: string,
-    title: string,
-    description: string,
-    genre: string,
-    imageURL: string,
-    coverImageURL: string,
-    createdAt: nat64,
-    updateAt: Opt<nat64>,
-}>
+  id: string,
+  title: string,
+  description: string,
+  genre: string,
+  imageURL: string,
+  coverImageURL: string,
+  createdAt: nat64,
+  updatedAt: Opt<nat64>,
+}>;
 
 type MoviePayload = Record<{
-    title: string,
-    description: string,
-    genre: string,
-    imageURL: string,
-    coverImageURL: string,
-}>
+  title: string,
+  description: string,
+  genre: string,
+  imageURL: string,
+  coverImageURL: string,
+}>;
 
 type User = Record<{
-    id: string,
-    name: string,
-    email: string,
-    password: string,
-    createdAt: nat64,
-    updateAt: Opt<nat64>,
-}>
+  id: string,
+  name: string,
+  email: string,
+  passwordHash: string, // Store hashed password
+  createdAt: nat64,
+  updatedAt: Opt<nat64>,
+}>;
 
 type UserPayload = Record<{
-    name: string,
-    email: string,
-    password: string,
-}>
+  name: string,
+  email: string,
+  password: string,
+}>;
 
 type WatchList = Record<{
-    id: string,
-    movies: Vec<string>
-}>
+  id: string,
+  movies: Vec<string>,
+}>;
 
-export const movieStorage = new StableBTreeMap<string, Movie>(0, 44, 1024)
+export const movieStorage = new StableBTreeMap<string, Movie>(0, 44, 1024);
 const userStorage = new StableBTreeMap<string, User>(1, 44, 1024);
-const userWatchlistStorage = new StableBTreeMap<string, WatchList>(2, 44, 2048)
+const userWatchlistStorage = new StableBTreeMap<string, WatchList>(2, 44, 2048);
 
 let currentUser: User | null = null;
-
 
 ////////////////////////////////////////////////////////////////
 // User operations
 ////////////////////////////////////////////////////////////////
 
 function getUserByEmail(email: string): User | null {
-    return userStorage.values().filter(user => user.email === email)[0];
+  return userStorage.values().find(user => user.email === email) || null;
 }
 
 $update;
 export function createUser(payload: UserPayload): Result<string, string> {
-    const user = getUserByEmail(payload.email);
-    if (user) {
-        return Result.Err<string, string>(`A user with email=${payload.email} already exists!`);
-    }
+  const user = getUserByEmail(payload.email);
+  if (user) {
+    return Result.Err<string, string>(`A user with email=${payload.email} already exists!`);
+  }
 
-    const newUser: User = { id: uuidv4(), createdAt: ic.time(), updateAt: Opt.None, ...payload };
-    userStorage.insert(newUser.id, newUser);
+  const passwordHash = bcrypt.hashSync(payload.password, 10); // Hash the password
+  const newUser: User = { id: uuidv4(), createdAt: ic.time(), updatedAt: Opt.None, passwordHash, ...payload };
+  userStorage.insert(newUser.id, newUser);
 
-    userWatchlistStorage.insert(newUser.id, { id: uuidv4(), movies: [] });
-    return Result.Ok<string, string>(`A user with email=${payload.email} successfully created!`);
+  userWatchlistStorage.insert(newUser.id, { id: uuidv4(), movies: [] });
+  return Result.Ok<string, string>(`A user with email=${payload.email} successfully created!`);
 }
 
-$update
+$update;
 export function loginUser(email: string, password: string): Result<string, string> {
-    const user = getUserByEmail(email);
-    if (!user) {
-        return Result.Err<string, string>(`A user with email=${email} does not exist!`);
-    }
+  const user = getUserByEmail(email);
+  if (!user) {
+    return Result.Err<string, string>(`A user with email=${email} does not exist!`);
+  }
 
-    if (user.password !== password) {
-        return Result.Err<string, string>(`Wrong password!`);
-    }
+  if (!bcrypt.compareSync(password, user.passwordHash)) {
+    return Result.Err<string, string>(`Wrong password!`);
+  }
 
-    currentUser = user;
-    return Result.Ok(`Successfully logged in!`);
+  currentUser = user;
+  return Result.Ok(`Successfully logged in!`);
 }
 
 export function logoutUser(): Result<string, string> {
-    if (!currentUser) {
-        return Result.Err<string, string>(`No user is logged in!`);
-    }
+  if (!currentUser) {
+    return Result.Err<string, string>(`No user is logged in!`);
+  }
 
-    currentUser = null;
-    return Result.Ok<string, string>(`Successfully logged out!`);
+  currentUser = null;
+  return Result.Ok<string, string>(`Successfully logged out!`);
 }
 
 ////////////////////////////////////////////////////////////////
@@ -222,14 +235,10 @@ export function removeMovieFromWatchlist(movieId: string): Result<string, string
 
 
 globalThis.crypto = {
-    // @ts-ignore
-    getRandomValues: () => {
-        let array = new Uint8Array(32)
-
-        for (let i = 0; i < array.length; i++) {
-            array[i] = Math.floor(Math.random() * 256)
-        }
-
-        return array
-    }
-}
+  // @ts-ignore
+  getRandomValues: () => {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return array;
+  }
+};
