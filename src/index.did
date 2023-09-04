@@ -1,0 +1,36 @@
+type Movie = record {
+  id : text;
+  coverImageURL : text;
+  title : text;
+  createdAt : nat64;
+  description : text;
+  updateAt : opt nat64;
+  imageURL : text;
+  genre : text;
+};
+type MoviePayload = record {
+  coverImageURL : text;
+  title : text;
+  description : text;
+  imageURL : text;
+  genre : text;
+};
+type UserPayload = record { password : text; name : text; email : text };
+type WatchList = record { id : text; movies : vec text };
+type _AzleResult = variant { Ok : text; Err : text };
+type _AzleResult_1 = variant { Ok : Movie; Err : text };
+type _AzleResult_2 = variant { Ok : vec Movie; Err : text };
+type _AzleResult_3 = variant { Ok : WatchList; Err : text };
+service : () -> {
+  addMovieToWatchlist : (text) -> (_AzleResult);
+  createMovie : (MoviePayload) -> (_AzleResult_1);
+  createUser : (UserPayload) -> (_AzleResult);
+  deleteMovie : (text) -> (_AzleResult_1);
+  getMovieById : (text) -> (_AzleResult_1) query;
+  getMovieByTitle : (text) -> (_AzleResult_1);
+  getMovies : () -> (_AzleResult_2) query;
+  getWatchlist : () -> (_AzleResult_3) query;
+  loginUser : (text, text) -> (_AzleResult);
+  removeMovieFromWatchlist : (text) -> (_AzleResult);
+  updateMovie : (text, MoviePayload) -> (_AzleResult_1);
+}
