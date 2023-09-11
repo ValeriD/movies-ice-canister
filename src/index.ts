@@ -1,4 +1,4 @@
-import { $query, $update, Record, StableBTreeMap, Vec, match, Result, nat64, ic, Opt } from 'azle';
+import { $query, $update, Record, StableBTreeMap, Vec, match, Result, nat64, ic, Opt, Principal } from 'azle';
 import { v4 as uuidv4 } from 'uuid';
 
 ////////////////////////////////////////////////////////////////
@@ -24,18 +24,15 @@ type MoviePayload = Record<{
 }>
 
 type User = Record<{
-    id: string,
+    principal: Principal,
     name: string,
-    email: string,
-    password: string,
     createdAt: nat64,
     updateAt: Opt<nat64>,
+    loggedIn: boolean,
 }>
 
 type UserPayload = Record<{
     name: string,
-    email: string,
-    password: string,
 }>
 
 type WatchList = Record<{
@@ -44,55 +41,58 @@ type WatchList = Record<{
 }>
 
 export const movieStorage = new StableBTreeMap<string, Movie>(0, 44, 1024)
-const userStorage = new StableBTreeMap<string, User>(1, 44, 1024);
-const userWatchlistStorage = new StableBTreeMap<string, WatchList>(2, 44, 2048)
+const userStorage = new StableBTreeMap<Principal, User>(1, 44, 1024);
+const userWatchlistStorage = new StableBTreeMap<Principal, WatchList>(2, 44, 2048)
 
-let currentUser: User | null = null;
 
 
 ////////////////////////////////////////////////////////////////
 // User operations
 ////////////////////////////////////////////////////////////////
 
-function getUserByEmail(email: string): User | null {
-    return userStorage.values().filter(user => user.email === email)[0];
+function getUserByPrincipal(): Result<User, string> {
+    const user = userStorage.get(ic.caller())
+    if(!user.Some){
+        return Result.Err<User, string>(`User with principal=${ic.caller()} does not exist.`)
+    }
+    return Result.Ok(user.Some);
 }
 
 $update;
 export function createUser(payload: UserPayload): Result<string, string> {
-    const user = getUserByEmail(payload.email);
-    if (user) {
-        return Result.Err<string, string>(`A user with email=${payload.email} already exists!`);
+    const user = getUserByPrincipal();
+    if (user.Ok) {
+        return Result.Err<string, string>(`A User with principal=${ic.caller()} already exists!`);
     }
 
-    const newUser: User = { id: uuidv4(), createdAt: ic.time(), updateAt: Opt.None, ...payload };
-    userStorage.insert(newUser.id, newUser);
+    const newUser: User = {principal: ic.caller(), createdAt: ic.time(), updateAt: Opt.None, loggedIn: false, ...payload };
+    userStorage.insert(newUser.principal, newUser);
 
-    userWatchlistStorage.insert(newUser.id, { id: uuidv4(), movies: [] });
-    return Result.Ok<string, string>(`A user with email=${payload.email} successfully created!`);
+    userWatchlistStorage.insert(newUser.principal, { id: uuidv4(), movies: [] });
+    return Result.Ok<string, string>(`A user with principal=${ic.caller().toString()} successfully created!`);
 }
 
 $update
-export function loginUser(email: string, password: string): Result<string, string> {
-    const user = getUserByEmail(email);
-    if (!user) {
-        return Result.Err<string, string>(`A user with email=${email} does not exist!`);
+export function loginUser(): Result<string, string> {
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err<string, string>(result.Err);
     }
-
-    if (user.password !== password) {
-        return Result.Err<string, string>(`Wrong password!`);
-    }
-
-    currentUser = user;
+    const updatedUser: User  = {...result.Ok, loggedIn: true , updateAt: Opt.Some(ic.time())}
+    userStorage.insert(ic.caller(), updatedUser)
     return Result.Ok(`Successfully logged in!`);
 }
 
+$update
 export function logoutUser(): Result<string, string> {
-    if (!currentUser) {
-        return Result.Err<string, string>(`No user is logged in!`);
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err<string, string>(result.Err);
     }
 
-    currentUser = null;
+    const updatedUser: User  = {...result.Ok, loggedIn: false , updateAt: Opt.Some(ic.time())}
+    userStorage.insert(ic.caller(), updatedUser)
+
     return Result.Ok<string, string>(`Successfully logged out!`);
 }
 
@@ -114,14 +114,26 @@ export function getMovieById(id: string): Result<Movie, string> {
 
 $query;
 export function getMovieByTitle(title: string): Result<Movie, string> {
-    return match(movieStorage.values().filter(movie => movie.title === title)[0], {
-        Some: (movie: Movie) => Result.Ok<Movie, string>(movie),
-        None: () => Result.Err<Movie, string>(`A movie with title=${title} not found`)
-    })
+    if(title.trim().length === 0){
+        return Result.Err('Empty title')
+    }
+    const movies = movieStorage.values();
+    const movieIndex = movies.findIndex(movie => movie.title === title);
+    if(movieIndex === -1){
+        return Result.Err(`A movie with title=${title} not found`)
+    }
+    return Result.Ok<Movie, string>(movies[movieIndex])
 }
 
 $update;
 export function createMovie(payload: MoviePayload): Result<Movie, string> {
+    if(payload.title.trim().length === 0){
+        return Result.Err('Empty title')
+    }
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err(result.Err);
+    }
     const movie: Movie = { id: uuidv4(), createdAt: ic.time(), updateAt: Opt.None, ...payload };
     movieStorage.insert(movie.id, movie);
     return Result.Ok<Movie, string>(movie);
@@ -129,6 +141,10 @@ export function createMovie(payload: MoviePayload): Result<Movie, string> {
 
 $update;
 export function updateMovie(id: string, payload: MoviePayload): Result<Movie, string> {
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err(result.Err);
+    }
     return match(movieStorage.get(id), {
         Some: (movie) => {
 
@@ -142,54 +158,58 @@ export function updateMovie(id: string, payload: MoviePayload): Result<Movie, st
 
 $update;
 export function deleteMovie(id: string): Result<Movie, string> {
+
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err(result.Err);
+    }
     return match(movieStorage.remove(id), {
         Some: (deletedMovie) => {
-            deleteMovieFromWatchlists(id);
             return Result.Ok<Movie, string>(deletedMovie);
         },
         None: () => Result.Err<Movie, string>(`A movie with id=${id} not found`)
     })
 }
 
-function deleteMovieFromWatchlists(id: string): void {
-    userWatchlistStorage.values().forEach(watchlist => {
-        watchlist.movies = watchlist.movies.filter(movieId => movieId !== id);
-        userWatchlistStorage.insert(watchlist.id, watchlist);
-    })
-}
+
+
 
 ////////////////////////////////////////////////////////////////
 // Watchlists operations
 ////////////////////////////////////////////////////////////////
 $query;
 export function getWatchlist(): Result<WatchList, string> {
-    if (!currentUser) {
-        return Result.Err<WatchList, string>(`No user is logged in!`);
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err<WatchList, string>(result.Err);
     }
-    return match(userWatchlistStorage.get(currentUser.id), {
+    const currentUser : User = result.Ok;
+    return match(userWatchlistStorage.get(currentUser.principal), {
         Some: (watchlist) => Result.Ok<WatchList, string>(watchlist),
-        None: () => Result.Err<WatchList, string>(`A watchlist for user with id=${currentUser?.id} not found`)
+        None: () => Result.Err<WatchList, string>(`A watchlist for user with principal=${currentUser.principal} not found`)
     })
 }
 
 $update;
 export function addMovieToWatchlist(movieId: string): Result<string, string> {
-    if (!currentUser) {
-        return Result.Err<string, string>(`No user is logged in!`);
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err<string, string>(result.Err);
     }
+    const currentUser : User = result.Ok;
 
-    if (!movieStorage.get(movieId)) {
+    if (!movieStorage.get(movieId).Some) {
         return Result.Err<string, string>(`A movie with id=${movieId} not found`);
     }
 
-    return match(userWatchlistStorage.get(currentUser.id), {
+    return match(userWatchlistStorage.get(currentUser.principal), {
         Some: (watchlist) => {
             if (watchlist.movies.includes(movieId)) {
                 return Result.Ok<string, string>(`Movie with id=${movieId} is already in the watchlist`);
             }
 
             watchlist.movies.push(movieId);
-            userWatchlistStorage.insert(currentUser!.id, watchlist);
+            userWatchlistStorage.insert(currentUser.principal, watchlist);
             return Result.Ok<string, string>(`Successfully added movie with id=${movieId} to watchlist`);
         },
         None: () => Result.Ok<string, string>(``)
@@ -198,22 +218,24 @@ export function addMovieToWatchlist(movieId: string): Result<string, string> {
 
 $update;
 export function removeMovieFromWatchlist(movieId: string): Result<string, string> {
-    if (!currentUser) {
-        return Result.Err<string, string>(`No user is logged in!`);
+    const result = getUserByPrincipal();
+    if (result.Err || !result.Ok) {
+        return Result.Err<string, string>(result.Err);
     }
+    const currentUser : User = result.Ok;
 
-    if (!movieStorage.get(movieId)) {
+    if (!movieStorage.get(movieId).Some) {
         return Result.Err<string, string>(`A movie with id=${movieId} not found`);
     }
 
-    return match(userWatchlistStorage.get(currentUser.id), {
+    return match(userWatchlistStorage.get(currentUser.principal), {
         Some: (watchlist) => {
             if (!watchlist.movies.includes(movieId)) {
                 return Result.Ok<string, string>(`Movie with id=${movieId} is not in the watchlist`);
             }
 
             watchlist.movies = watchlist.movies.filter(id => id !== movieId);
-            userWatchlistStorage.insert(currentUser!.id, watchlist);
+            userWatchlistStorage.insert(currentUser.principal, watchlist);
             return Result.Ok<string, string>(`Successfully removed movie with id=${movieId} from watchlist`);
         },
         None: () => Result.Ok<string, string>(``)
