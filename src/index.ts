@@ -13,7 +13,7 @@ type Movie = Record<{
     coverImageURL: string,
     createdAt: nat64,
     updateAt: Opt<nat64>,
-}>
+}>;
 
 type MoviePayload = Record<{
     title: string,
@@ -21,7 +21,7 @@ type MoviePayload = Record<{
     genre: string,
     imageURL: string,
     coverImageURL: string,
-}>
+}>;
 
 type User = Record<{
     id: string,
@@ -30,22 +30,22 @@ type User = Record<{
     password: string,
     createdAt: nat64,
     updateAt: Opt<nat64>,
-}>
+}>;
 
 type UserPayload = Record<{
     name: string,
     email: string,
     password: string,
-}>
+}>;
 
 type WatchList = Record<{
     id: string,
-    movies: Vec<string>
-}>
+    movies: Vec<string>,
+}>;
 
-export const movieStorage = new StableBTreeMap<string, Movie>(0, 44, 1024)
+export const movieStorage = new StableBTreeMap<string, Movie>(0, 44, 1024);
 const userStorage = new StableBTreeMap<string, User>(1, 44, 1024);
-const userWatchlistStorage = new StableBTreeMap<string, WatchList>(2, 44, 2048)
+const userWatchlistStorage = new StableBTreeMap<string, WatchList>(2, 44, 2048);
 
 let currentUser: User | null = null;
 
@@ -72,7 +72,7 @@ export function createUser(payload: UserPayload): Result<string, string> {
     return Result.Ok<string, string>(`A user with email=${payload.email} successfully created!`);
 }
 
-$update
+$update;
 export function loginUser(email: string, password: string): Result<string, string> {
     const user = getUserByEmail(email);
     if (!user) {
@@ -99,7 +99,7 @@ export function logoutUser(): Result<string, string> {
 ////////////////////////////////////////////////////////////////
 // Movies operations
 ////////////////////////////////////////////////////////////////
-$query
+$query;
 export function getMovies(): Result<Vec<Movie>, string> {
     return Result.Ok<Vec<Movie>, string>(movieStorage.values());
 }
@@ -114,10 +114,11 @@ export function getMovieById(id: string): Result<Movie, string> {
 
 $query;
 export function getMovieByTitle(title: string): Result<Movie, string> {
-    return match(movieStorage.values().filter(movie => movie.title === title)[0], {
-        Some: (movie: Movie) => Result.Ok<Movie, string>(movie),
-        None: () => Result.Err<Movie, string>(`A movie with title=${title} not found`)
-    })
+    const filteredMovies = movieStorage.values().filter(movie => movie.title === title);
+    if (filteredMovies.length === 0) {
+        return Result.Err<Movie, string>(`A movie with title=${title} not found`);
+    }
+    return Result.Ok<Movie, string>(filteredMovies[0]);
 }
 
 $update;
